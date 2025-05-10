@@ -3,6 +3,9 @@ using KeyCloak.Domian.AccountsGroups;
 using KeyCloak.Domian.Users;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text;
+using System.Net.Http;
 
 namespace KeyCloak.Infrastructure.Identity;
 
@@ -37,9 +40,17 @@ public sealed class KeyCloakClient(HttpClient httpClient)
 
     public async Task<string> CreateGroupAsync(GroupRepresentation group, string adminToken, CancellationToken cancellationToken)
     {
+
+        var groupData = new
+        {
+            name = group.Name,
+        };
+
+        var jsonContent = new StringContent(JsonSerializer.Serialize(groupData), Encoding.UTF8, "application/json");
         httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
 
-        var response = await httpClient.PostAsJsonAsync("groups", group, cancellationToken);
+        var response = await httpClient.PostAsync($"groups", jsonContent);
+
         response.EnsureSuccessStatusCode();
         return ExtractGroupIdentityIdFromLocationHeader(response);
     }

@@ -13,7 +13,7 @@ namespace KeyCloak.Api.Controllers.Groups;
 [ApiController]
 [Authorize]
 [ApiVersion("1.0")]
-[Route("api/v{version:apiVersion}/users")]
+[Route("api/v{version:apiVersion}/groups")]
 public class GroupsController(ISender sender) : ControllerBase
 {
     [HttpPost("create_group")]

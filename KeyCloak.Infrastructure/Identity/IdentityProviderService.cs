@@ -224,7 +224,7 @@ public sealed class IdentityProviderService(
             var token = await GetAdminTokenAsync(cancellationToken);
             // Check if the group already exists
             var existingGroup = await keyCloakClient.GetGroupByNameAsync(group.Name, token, cancellationToken);
-            if (existingGroup != null)
+            if (existingGroup.Count != 0)
             {
                 logger.LogError("Group creation failed: Group with the same name already exists.");
                 return Result.Failure<string>(AccountsGroupsErrors.GroupNameIsNotUnique(group.Name));
