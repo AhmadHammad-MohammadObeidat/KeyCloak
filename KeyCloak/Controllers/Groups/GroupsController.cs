@@ -2,8 +2,11 @@
 using KeyCloak.Application.Groups;
 using KeyCloak.Application.Groups.CreateGroup;
 using KeyCloak.Application.Groups.DeleteGroup;
+using KeyCloak.Application.Groups.GetAllGroups;
 using KeyCloak.Application.Groups.UpdateGroup;
 using KeyCloak.Application.Users.RegisterUser;
+using KeyCloak.Domian;
+using KeyCloak.Infrastructure.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -48,7 +51,7 @@ public class GroupsController(ISender sender) : ControllerBase
         return result.IsFailure ? BadRequest(result.Error) : Ok(result.Value);
     }
 
-    [HttpDelete("delete_group")]
+    [HttpDelete("delete_group/{groupId}")]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status201Created, Type = typeof(Guid))]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -61,6 +64,22 @@ public class GroupsController(ISender sender) : ControllerBase
         var command = new DeleteGroupCommand(groupId);
 
         var result = await sender.Send(command, cancellationToken);
+        return result.IsFailure ? BadRequest(result.Error) : Ok(result.Value);
+    }
+
+    [HttpGet("get-all-groups")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(List<Dictionary<string, object>>))]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> GetAllGroups(CancellationToken cancellationToken = default)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var query = new GetAllGroupsQuery();
+        var result = await sender.Send(query, cancellationToken);
+
         return result.IsFailure ? BadRequest(result.Error) : Ok(result.Value);
     }
 }

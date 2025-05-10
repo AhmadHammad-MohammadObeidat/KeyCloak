@@ -1,11 +1,6 @@
 ﻿using KeyCloak.Application.Abstractions.Identity;
 using KeyCloak.Domian.Users;
 using KeyCloak.Domian;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using KeyCloak.Application.Messaging;
 
 namespace KeyCloak.Application.Users.GetUsersByGroup;

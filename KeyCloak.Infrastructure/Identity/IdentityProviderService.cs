@@ -246,11 +246,15 @@ public sealed class IdentityProviderService(
 
     public async Task<Result<string>> UpdateGroupAsync(GroupRepresentation group, CancellationToken cancellationToken = default)
     {
-        var groupRepresentation = new GroupRepresentation(group.Name, group.ParentId);
+        var groupRepresentation = new GroupRepresentation(group.Name, group.GroupId, group.ParentId);
         try
         {
             var token = await GetAdminTokenAsync(cancellationToken);
-            var identityId = await keyCloakClient.UpdateGroupAsync(groupRepresentation, token, cancellationToken);
+            if (!await keyCloakClient.UpdateGroupAsync(groupRepresentation, token, cancellationToken))
+            {
+                throw new HttpRequestException("Conflict occurred while updating the group.", null, HttpStatusCode.Conflict);
+            }
+            var identityId = group.GroupId.ToString();
             return identityId;
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
@@ -263,7 +267,6 @@ public sealed class IdentityProviderService(
             logger.LogError(ex, "Group update failed unexpectedly.");
             return Result.Failure<string>(AccountsGroupsErrors.GroupUpdateFailed(group.ParentId?.ToString() ?? "null"));
         }
-
     }
     public async Task<Result<string>> DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken = default)
     {
@@ -315,5 +318,17 @@ public sealed class IdentityProviderService(
         return await keyCloakClient.GetUsersByGroupAsync(groupClaim, token, cancellationToken);
     }
 
-
+    public async Task<List<Dictionary<string, object>>> GetAllGroupsAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var token = await GetAdminTokenAsync(cancellationToken);
+            return await keyCloakClient.GetAllGroupsAsync(token,cancellationToken);
+        }
+        catch(Exception ex)
+        {
+            logger.LogError(ex, "Unexpected error occurred while getting admin token.");
+            throw;
+        }
+    }
 }

@@ -11,7 +11,7 @@ public sealed class UpdateGroupCommandHandler(
 {
     public async Task<Result<Guid>> Handle(UpdateGroupCommand request, CancellationToken cancellationToken)
     {
-        var result = await identityProviderService.CreateGroupAsync(new GroupRepresentation(request.GroupName, request.GroupId, null), cancellationToken);
+        var result = await identityProviderService.UpdateGroupAsync(new GroupRepresentation(request.GroupName, request.GroupId, null), cancellationToken);
         if (result.IsFailure)
         {
             return Result.Failure<Guid>(result.Error);

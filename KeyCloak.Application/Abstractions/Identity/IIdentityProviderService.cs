@@ -18,4 +18,5 @@ public interface IIdentityProviderService
     Task<Result<bool>> ResendConfirmationEmailAsync(string email, CancellationToken cancellationToken = default);
     Task<Result<string>> RegisterAdminUserAsync(UserModel user, string targetGroup, CancellationToken cancellationToken = default);
     Task<List<UserDto>> GetUsersInCallerGroupAsync(ClaimsPrincipal userPrincipal, CancellationToken cancellationToken);
+    Task<List<Dictionary<string, object>>> GetAllGroupsAsync(CancellationToken cancellationToken = default);
 }
