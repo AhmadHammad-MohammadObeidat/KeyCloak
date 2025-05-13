@@ -3,6 +3,8 @@ using KeyCloak.Application.Groups;
 using KeyCloak.Application.Groups.CreateGroup;
 using KeyCloak.Application.Groups.DeleteGroup;
 using KeyCloak.Application.Groups.GetAllGroups;
+using KeyCloak.Application.Groups.GetGroup;
+using KeyCloak.Application.Groups.GetGroupWithUsers;
 using KeyCloak.Application.Groups.UpdateGroup;
 using KeyCloak.Application.Users.RegisterUser;
 using KeyCloak.Domian;
@@ -81,5 +83,27 @@ public class GroupsController(ISender sender) : ControllerBase
         var result = await sender.Send(query, cancellationToken);
 
         return result.IsFailure ? BadRequest(result.Error) : Ok(result.Value);
+    }
+
+    [HttpGet("get-groups")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(List<Dictionary<string, object>>))]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> GetFilteredGroups(CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new GetFilteredGroupsQuery(User), cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpGet("get-groups-with-users")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(List<Dictionary<string, object>>))]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> GetGroupsWithUsers(CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new GetGroupsWithUsersQuery(User), cancellationToken);
+        return Ok(result);
     }
 }

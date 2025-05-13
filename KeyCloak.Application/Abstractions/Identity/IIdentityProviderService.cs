@@ -1,4 +1,5 @@
-﻿using KeyCloak.Domian;
+﻿using KeyCloak.Application.Groups.GetGroupWithUsers;
+using KeyCloak.Domian;
 using KeyCloak.Domian.AccountsGroups;
 using KeyCloak.Domian.Users;
 using System.Security.Claims;
@@ -19,4 +20,6 @@ public interface IIdentityProviderService
     Task<Result<string>> RegisterAdminUserAsync(UserModel user, string targetGroup, CancellationToken cancellationToken = default);
     Task<List<UserDto>> GetUsersInCallerGroupAsync(ClaimsPrincipal userPrincipal, CancellationToken cancellationToken);
     Task<List<Dictionary<string, object>>> GetAllGroupsAsync(CancellationToken cancellationToken = default);
+    Task<List<Dictionary<string, object>>> GetFilteredGroupsAsync(ClaimsPrincipal user, CancellationToken cancellationToken);
+    Task<List<GroupWithUsersDto>> GetGroupsWithUsersByRolesAsync(ClaimsPrincipal user, CancellationToken cancellationToken);
 }

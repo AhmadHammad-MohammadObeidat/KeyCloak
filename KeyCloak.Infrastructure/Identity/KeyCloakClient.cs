@@ -7,6 +7,8 @@ using System.Text.Json;
 using System.Text;
 using System.Net.Http;
 using System.Net;
+using System.Security.Claims;
+using KeyCloak.Application.Groups.GetGroupWithUsers;
 
 namespace KeyCloak.Infrastructure.Identity;
 
@@ -69,7 +71,7 @@ public sealed class KeyCloakClient(HttpClient httpClient)
         var response = await httpClient.PutAsJsonAsync($"groups/{group.GroupId}", updatePayload, cancellationToken);
         response.EnsureSuccessStatusCode();
         Guid groupId = group.GroupId ?? Guid.Empty;
-        return GroupExistsAsync(groupId,adminToken,cancellationToken).Result;
+        return GroupExistsAsync(groupId, adminToken, cancellationToken).Result;
     }
     public async Task<string> DeleteGroupAsync(Guid groupId, string adminToken, CancellationToken cancellationToken)
     {
@@ -336,5 +338,184 @@ public sealed class KeyCloakClient(HttpClient httpClient)
             }
         }
         return groups;
+    }
+
+    public async Task<List<Dictionary<string, object>>> GetFilteredGroupsByRolesAsync(
+        string adminToken,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var response = await httpClient.GetAsync("groups", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var allGroups = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(content, DefaultJsonSerializerOptions)
+                         ?? new List<Dictionary<string, object>>();
+
+        var userRoles = user.Claims
+                     .Where(c => c.Type == "realm_access")
+                     .SelectMany(c =>
+                     {
+                         var roles = new List<string>();
+                         try
+                         {
+                             var doc = JsonDocument.Parse(c.Value);
+                             if (doc.RootElement.TryGetProperty("roles", out var rolesElement))
+                             {
+                                 roles.AddRange(rolesElement.EnumerateArray().Select(x => x.GetString() ?? string.Empty));
+                             }
+                         }
+                         catch (Exception ex)
+                         {
+                             Console.WriteLine("❌ Failed to parse realm_access: " + ex.Message);
+                         }
+                         return roles;
+                     })
+                     .Where(r => !string.IsNullOrWhiteSpace(r))
+                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+
+        var result = new List<Dictionary<string, object>>();
+
+        foreach (var group in allGroups)
+        {
+            var matchedGroup = await FilterGroupByUserRolesAsync(group, userRoles, adminToken, cancellationToken);
+            if (matchedGroup != null)
+            {
+                result.Add(matchedGroup);
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<Dictionary<string, object>?> FilterGroupByUserRolesAsync(
+        Dictionary<string, object> group,
+        HashSet<string> userRoles,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        if (!group.TryGetValue("id", out var groupIdObj))
+            return null;
+
+        string groupId = groupIdObj switch
+        {
+            JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString() ?? string.Empty,
+            string idString => idString,
+            _ => string.Empty
+        };
+
+        if (string.IsNullOrWhiteSpace(groupId))
+            return null;
+
+        string groupName = group.TryGetValue("name", out var nameObj) && nameObj is JsonElement nameElement && nameElement.ValueKind == JsonValueKind.String
+            ? nameElement.GetString() ?? string.Empty
+            : string.Empty;
+
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // Always check subgroups
+        var subgroupResponse = await httpClient.GetAsync($"groups/{groupId}/children", cancellationToken);
+        subgroupResponse.EnsureSuccessStatusCode();
+
+        var subgroupContent = await subgroupResponse.Content.ReadAsStringAsync(cancellationToken);
+        var subGroups = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(subgroupContent, DefaultJsonSerializerOptions)
+                         ?? new List<Dictionary<string, object>>();
+
+
+        // Filter only matching subgroups
+        var matchingSubGroups = new List<Dictionary<string, object>>();
+
+        foreach (var subGroup in subGroups)
+        {
+            string subName = subGroup.TryGetValue("name", out var subNameObj) && subNameObj is JsonElement subNameElement && subNameElement.ValueKind == JsonValueKind.String
+                ? subNameElement.GetString() ?? string.Empty
+                : string.Empty;
+
+            if (userRoles.Contains(subName))
+            {
+                matchingSubGroups.Add(subGroup);
+            }
+        }
+
+        // Return the group if:
+        // - the group name matches
+        // - OR one of its subgroups matches
+        if (userRoles.Contains(groupName) || matchingSubGroups.Count > 0)
+        {
+            group["subGroups"] = matchingSubGroups;
+            return group;
+        }
+
+        return null;
+    }
+
+    public async Task<List<GroupWithUsersDto>> GetGroupsWithUsersByRolesAsync(
+    string token,
+    ClaimsPrincipal user,
+    CancellationToken cancellationToken)
+    {
+        // Extract user roles from realm_access claim
+        var userRoles = user.Claims
+            .Where(c => c.Type == "realm_access")
+            .SelectMany(c =>
+            {
+                var roles = new List<string>();
+                try
+                {
+                    var doc = JsonDocument.Parse(c.Value);
+                    if (doc.RootElement.TryGetProperty("roles", out var rolesElement))
+                    {
+                        roles.AddRange(rolesElement.EnumerateArray().Select(r => r.GetString() ?? string.Empty));
+                    }
+                }
+                catch { /* Ignore parse failures */ }
+                return roles;
+            })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<GroupWithUsersDto>();
+
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var response = await httpClient.GetAsync("groups", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var groups = await response.Content.ReadFromJsonAsync<List<Dictionary<string, object>>>(cancellationToken: cancellationToken)
+                     ?? new List<Dictionary<string, object>>();
+
+        foreach (var group in groups)
+        {
+            var groupId = group.TryGetValue("id", out var idObj) && idObj is JsonElement idEl && idEl.ValueKind == JsonValueKind.String
+                ? idEl.GetString()
+                : null;
+
+            var groupName = group.TryGetValue("name", out var nameObj) && nameObj is JsonElement nameEl && nameEl.ValueKind == JsonValueKind.String
+                ? nameEl.GetString()
+                : null;
+
+            if (!string.IsNullOrWhiteSpace(groupId) && !string.IsNullOrWhiteSpace(groupName))
+            {
+                if (!userRoles.Contains(groupName))
+                    continue;
+
+                var usersResponse = await httpClient.GetAsync($"groups/{groupId}/members", cancellationToken);
+                usersResponse.EnsureSuccessStatusCode();
+
+                var users = await usersResponse.Content.ReadFromJsonAsync<List<UserDto>>(cancellationToken: cancellationToken)
+                            ?? new List<UserDto>();
+
+                result.Add(new GroupWithUsersDto
+                {
+                    GroupId = groupId,
+                    GroupName = groupName,
+                    Users = users
+                });
+            }
+        }
+
+        return result;
     }
 }

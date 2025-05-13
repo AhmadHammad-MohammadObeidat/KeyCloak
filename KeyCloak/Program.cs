@@ -7,30 +7,30 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Versioning;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
-using Swashbuckle.AspNetCore.Swagger;
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ✅ MediatR setup
+// ✅ MediatR for application layer
 builder.Services.AddMediatR(cfg =>
 {
     cfg.RegisterServicesFromAssembly(typeof(RegisterUserCommand).Assembly);
 });
 
-// ✅ Configure Keycloak settings
+// ✅ Keycloak options binding
 builder.Services.Configure<KeyCloakOptions>(
     builder.Configuration.GetSection("KeyCloak"));
 
-// ✅ Register Keycloak client and identity service
+// ✅ HTTP client for Keycloak admin API
 builder.Services.AddHttpClient<KeyCloakClient>(client =>
 {
     client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
 });
 builder.Services.AddScoped<IIdentityProviderService, IdentityProviderService>();
 
-// ✅ JWT Authentication using Keycloak
+// ✅ Authentication via JWT Bearer tokens from Keycloak
 var keycloakSettings = builder.Configuration.GetSection("KeyCloak");
 
 builder.Services.AddAuthentication(options =>
@@ -40,38 +40,36 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
-    options.Authority = keycloakSettings["Authority"];
-    options.Audience = keycloakSettings["Audience"];
+    options.Authority = keycloakSettings["Authority"]; // e.g., http://localhost:8080/realms/KeyCloakDotNetReleam
     options.RequireHttpsMetadata = false;
+    options.Audience = "account"; // or keycloakSettings["Audience"]
 
     options.TokenValidationParameters = new TokenValidationParameters
     {
-        RoleClaimType = ClaimTypes.Role, // TEMPORARY, used below
         ValidateIssuer = true,
         ValidIssuer = keycloakSettings["Issuer"],
-        ValidateAudience = true,
-        ValidAudience = keycloakSettings["Audience"],
-        ValidateLifetime = true
+        ValidateAudience = false, // ✅ Skip audience validation (or use "account")
+        ValidateLifetime = true,
+        RoleClaimType = ClaimTypes.Role
     };
 
-    // 🧠 This adds "realm_access.roles" to ClaimsPrincipal
+    // ✅ Extract realm_access.roles as individual role claims
     options.Events = new JwtBearerEvents
     {
         OnTokenValidated = context =>
         {
             var user = context.Principal;
-
             if (user?.Identity is ClaimsIdentity identity)
             {
                 var realmAccess = user.FindFirst("realm_access")?.Value;
-                if (realmAccess != null)
+                if (!string.IsNullOrWhiteSpace(realmAccess))
                 {
-                    var parsed = System.Text.Json.JsonDocument.Parse(realmAccess);
-                    if (parsed.RootElement.TryGetProperty("roles", out var rolesElement))
+                    using var doc = JsonDocument.Parse(realmAccess);
+                    if (doc.RootElement.TryGetProperty("roles", out var rolesElement))
                     {
                         foreach (var role in rolesElement.EnumerateArray())
                         {
-                            identity.AddClaim(new Claim(ClaimTypes.Role, role.GetString()));
+                            identity.AddClaim(new Claim(ClaimTypes.Role, role.GetString() ?? ""));
                         }
                     }
                 }
@@ -82,36 +80,14 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// ✅ Authorization policies that match Keycloak roles
+// ✅ Authorization policies
 builder.Services.AddAuthorization(options =>
 {
-    // Generic admin policy
     options.AddPolicy("RequireAdminRole", policy =>
         policy.RequireRole("admin", "group-admin-demo", "group-admin-real", "group-admin-pending"));
 
-    // DEMO policies using Keycloak's actual role
-    options.AddPolicy("CreateDemoUser", policy =>
-        policy.RequireRole("admin-demo-create"));
     options.AddPolicy("GetDemoUser", policy =>
-        policy.RequireRole("admin-demo-get"));
-    options.AddPolicy("UpdateDemoUser", policy =>
-        policy.RequireRole("admin-demo-update"));
-
-    // REAL policies
-    options.AddPolicy("CreateRealUser", policy =>
-        policy.RequireRole("admin-real-create"));
-    options.AddPolicy("GetRealUser", policy =>
-        policy.RequireRole("admin-real-get"));
-    options.AddPolicy("UpdateRealUser", policy =>
-        policy.RequireRole("admin-real-update"));
-
-    // PENDING policies
-    options.AddPolicy("CreatePendingUser", policy =>
-        policy.RequireRole("admin-pending-create"));
-    options.AddPolicy("GetPendingUser", policy =>
-        policy.RequireRole("admin-pending-get"));
-    options.AddPolicy("UpdatePendingUser", policy =>
-        policy.RequireRole("admin-pending-update"));
+        policy.RequireRole("Get-Demo-Group")); // Example Keycloak role
 });
 
 // ✅ API Versioning
@@ -128,20 +104,20 @@ builder.Services.AddVersionedApiExplorer(options =>
     options.SubstituteApiVersionInUrl = true;
 });
 
-// ✅ Controllers and JSON options
+// ✅ Add controllers and JSON options
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
     });
 
-// ✅ Swagger support (optional)
+// ✅ Swagger + JWT support
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "KeyCloak API", Version = "v1" });
-    
-    // Configure JWT authentication for Swagger
+
+    // JWT auth support in Swagger
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -149,9 +125,9 @@ builder.Services.AddSwaggerGen(c =>
         Scheme = "bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "JWT Authorization header using the Bearer scheme."
+        Description = "Enter 'Bearer' [space] and then your token."
     });
-    
+
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
@@ -163,23 +139,22 @@ builder.Services.AddSwaggerGen(c =>
                     Id = "Bearer"
                 }
             },
-            new string[] {}
+            Array.Empty<string>()
         }
     });
 });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline
+// ✅ Middleware setup
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-// ✅ Middleware
 app.UseHttpsRedirection();
-app.UseAuthentication();
+app.UseAuthentication(); // 🔥 Required to populate ClaimsPrincipal
 app.UseAuthorization();
 
 app.MapControllers();

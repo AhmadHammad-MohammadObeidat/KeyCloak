@@ -4,6 +4,7 @@ using KeyCloak.Application.Users.GetUsersByGroup;
 using KeyCloak.Domian.Users;
 using KeyCloak.Domian;
 using MediatR;
+using System.Security.Claims;
 
 namespace KeyCloak.Application.Groups.GetAllGroups;
 
