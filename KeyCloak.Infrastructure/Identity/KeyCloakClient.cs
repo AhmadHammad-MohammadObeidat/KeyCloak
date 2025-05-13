@@ -3,11 +3,21 @@ using KeyCloak.Domian.AccountsGroups;
 using KeyCloak.Domian.Users;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text;
+using System.Net.Http;
+using System.Net;
+using System.Security.Claims;
+using KeyCloak.Application.Groups.GetGroupWithUsers;
 
 namespace KeyCloak.Infrastructure.Identity;
 
 public sealed class KeyCloakClient(HttpClient httpClient)
 {
+    private static readonly JsonSerializerOptions DefaultJsonSerializerOptions = new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true
+    };
     public async Task<TokenResponse> UserLoginAsync(string username, string password, string publicClientId, string scope,
                                                     string grantType, string tokenUrl, CancellationToken cancellationToken = default)
     {
@@ -37,29 +47,43 @@ public sealed class KeyCloakClient(HttpClient httpClient)
 
     public async Task<string> CreateGroupAsync(GroupRepresentation group, string adminToken, CancellationToken cancellationToken)
     {
+        var groupData = new
+        {
+            name = group.Name,
+        };
+
+        var jsonContent = new StringContent(JsonSerializer.Serialize(groupData), Encoding.UTF8, "application/json");
         httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
 
-        var response = await httpClient.PostAsJsonAsync("groups", group, cancellationToken);
+        var response = await httpClient.PostAsync($"groups", jsonContent);
+
         response.EnsureSuccessStatusCode();
         return ExtractGroupIdentityIdFromLocationHeader(response);
     }
-    public async Task<string> UpdateGroupAsync(GroupRepresentation group, string adminToken, CancellationToken cancellationToken)
+    public async Task<bool> UpdateGroupAsync(GroupRepresentation group, string adminToken, CancellationToken cancellationToken)
     {
-        await CreateGroupIfNotExistsAsync(group.Name, adminToken, cancellationToken).ConfigureAwait(false);
-
+        //await CreateGroupIfNotExistsAsync(group.Name, adminToken, cancellationToken).ConfigureAwait(false);
+        var updatePayload = new
+        {
+            name = group.Name
+        };
         httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
-        var response = await httpClient.PutAsJsonAsync($"groups/{group.GroupId}", group, cancellationToken);
+        var response = await httpClient.PutAsJsonAsync($"groups/{group.GroupId}", updatePayload, cancellationToken);
         response.EnsureSuccessStatusCode();
-        return ExtractGroupIdentityIdFromLocationHeader(response);
+        Guid groupId = group.GroupId ?? Guid.Empty;
+        return GroupExistsAsync(groupId, adminToken, cancellationToken).Result;
     }
     public async Task<string> DeleteGroupAsync(Guid groupId, string adminToken, CancellationToken cancellationToken)
     {
         httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
         var response = await httpClient.DeleteAsync($"groups/{groupId}", cancellationToken);
 
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            throw new InvalidOperationException($"Group with ID '{groupId}' was not found.");
+        }
         response.EnsureSuccessStatusCode();
-        
-        return ExtractGroupIdentityIdFromLocationHeader(response);
+        return groupId.ToString();
     }
 
     public async Task<TokenResponse> RefreshTokenAsync(string refreshToken, string publicClientId, string grantType, string tokenUrl, CancellationToken cancellationToken)
@@ -157,10 +181,11 @@ public sealed class KeyCloakClient(HttpClient httpClient)
         var groups = await groupsResponse.Content.ReadFromJsonAsync<List<GroupRepresentation>>(cancellationToken: cancellationToken);
         var existing = groups?.FirstOrDefault(g => g.Name.Equals(groupName, StringComparison.OrdinalIgnoreCase));
         if (existing != null && existing.GroupId.HasValue) return existing.GroupId.Value.ToString();
-
-        // Create new group
-        var group = new GroupRepresentation(groupName);
-        var createResponse = await httpClient.PostAsJsonAsync("groups", group, cancellationToken);
+        var groupData = new
+        {
+            name = groupName
+        };
+        var createResponse = await httpClient.PostAsJsonAsync("groups", groupData, cancellationToken);
         createResponse.EnsureSuccessStatusCode();
 
         return ExtractGroupIdentityIdFromLocationHeader(createResponse);
@@ -221,5 +246,276 @@ public sealed class KeyCloakClient(HttpClient httpClient)
         response.EnsureSuccessStatusCode();
         var groups = await response.Content.ReadFromJsonAsync<List<GroupRepresentation>>(cancellationToken: cancellationToken);
         return groups?.Select(g => new GroupRepresentation(g.Name, g.GroupId)).ToList() ?? new List<GroupRepresentation>();
+    }
+
+    public async Task<bool> GroupExistsAsync(Guid groupId, string accessToken, CancellationToken cancellationToken)
+    {
+        string groupIdString = groupId.ToString();
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        var idResponse = await httpClient.GetAsync($"groups/{groupIdString}", cancellationToken);
+        if (idResponse.IsSuccessStatusCode)
+            return true;
+        var listResponse = await httpClient.GetAsync("groups", cancellationToken);
+        if (!listResponse.IsSuccessStatusCode)
+            return false;
+        var groups = await listResponse.Content.ReadFromJsonAsync<List<GroupRepresentation>>(cancellationToken: cancellationToken);
+        return groups?.Any(g => g.Name.Equals(groupIdString, StringComparison.OrdinalIgnoreCase)) ?? false;
+    }
+
+    public async Task<List<Dictionary<string, object>>> GetAllGroupsAsync(string adminToken, CancellationToken cancellationToken)
+    {
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var response = await httpClient.GetAsync($"groups", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var allGroups = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(content, DefaultJsonSerializerOptions)
+                        ?? new List<Dictionary<string, object>>();
+
+        for (int i = 0; i < allGroups.Count; i++)
+        {
+            if (allGroups[i].TryGetValue("id", out var groupIdObj) && groupIdObj is JsonElement idElement && idElement.ValueKind == JsonValueKind.String)
+            {
+                string groupId = idElement.GetString() ?? string.Empty;
+
+                var subGroupsResponse = await httpClient.GetAsync($"groups/{groupId}/children", cancellationToken);
+                subGroupsResponse.EnsureSuccessStatusCode();
+
+                var subGroupsContent = await subGroupsResponse.Content.ReadAsStringAsync(cancellationToken);
+                var subGroups = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(subGroupsContent, DefaultJsonSerializerOptions)
+                               ?? new List<Dictionary<string, object>>();
+                if (subGroups.Count > 0)
+                {
+                    allGroups[i]["subGroups"] = await ProcessSubGroupsRecursivelyAsync(subGroups, adminToken, cancellationToken);
+                }
+            }
+        }
+
+        return allGroups;
+    }
+    private async Task<List<Dictionary<string, object>>> ProcessSubGroupsRecursivelyAsync(
+        List<Dictionary<string, object>> groups,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        for (int i = 0; i < groups.Count; i++)
+        {
+            if (groups[i].TryGetValue("id", out var groupIdObj))
+            {
+                string groupId;
+
+                if (groupIdObj is JsonElement idElement && idElement.ValueKind == JsonValueKind.String)
+                {
+                    groupId = idElement.GetString() ?? string.Empty;
+                }
+                else if (groupIdObj is string idString)
+                {
+                    groupId = idString;
+                }
+                else
+                {
+                    continue;
+                }
+                var response = await httpClient.GetAsync($"groups/{groupId}/children", cancellationToken);
+                response.EnsureSuccessStatusCode();
+
+                var content = await response.Content.ReadAsStringAsync(cancellationToken);
+                var subGroups = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(content, DefaultJsonSerializerOptions)
+                               ?? new List<Dictionary<string, object>>();
+
+                if (subGroups.Count > 0)
+                {
+                    groups[i]["subGroups"] = await ProcessSubGroupsRecursivelyAsync(subGroups, token, cancellationToken);
+                }
+                else
+                {
+                    groups[i]["subGroups"] = new List<Dictionary<string, object>>();
+                }
+            }
+        }
+        return groups;
+    }
+
+    public async Task<List<Dictionary<string, object>>> GetFilteredGroupsByRolesAsync(
+        string adminToken,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var response = await httpClient.GetAsync("groups", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var allGroups = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(content, DefaultJsonSerializerOptions)
+                         ?? new List<Dictionary<string, object>>();
+
+        var userRoles = user.Claims
+                     .Where(c => c.Type == "realm_access")
+                     .SelectMany(c =>
+                     {
+                         var roles = new List<string>();
+                         try
+                         {
+                             var doc = JsonDocument.Parse(c.Value);
+                             if (doc.RootElement.TryGetProperty("roles", out var rolesElement))
+                             {
+                                 roles.AddRange(rolesElement.EnumerateArray().Select(x => x.GetString() ?? string.Empty));
+                             }
+                         }
+                         catch (Exception ex)
+                         {
+                             Console.WriteLine("❌ Failed to parse realm_access: " + ex.Message);
+                         }
+                         return roles;
+                     })
+                     .Where(r => !string.IsNullOrWhiteSpace(r))
+                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+
+        var result = new List<Dictionary<string, object>>();
+
+        foreach (var group in allGroups)
+        {
+            var matchedGroup = await FilterGroupByUserRolesAsync(group, userRoles, adminToken, cancellationToken);
+            if (matchedGroup != null)
+            {
+                result.Add(matchedGroup);
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<Dictionary<string, object>?> FilterGroupByUserRolesAsync(
+        Dictionary<string, object> group,
+        HashSet<string> userRoles,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        if (!group.TryGetValue("id", out var groupIdObj))
+            return null;
+
+        string groupId = groupIdObj switch
+        {
+            JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString() ?? string.Empty,
+            string idString => idString,
+            _ => string.Empty
+        };
+
+        if (string.IsNullOrWhiteSpace(groupId))
+            return null;
+
+        string groupName = group.TryGetValue("name", out var nameObj) && nameObj is JsonElement nameElement && nameElement.ValueKind == JsonValueKind.String
+            ? nameElement.GetString() ?? string.Empty
+            : string.Empty;
+
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // Always check subgroups
+        var subgroupResponse = await httpClient.GetAsync($"groups/{groupId}/children", cancellationToken);
+        subgroupResponse.EnsureSuccessStatusCode();
+
+        var subgroupContent = await subgroupResponse.Content.ReadAsStringAsync(cancellationToken);
+        var subGroups = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(subgroupContent, DefaultJsonSerializerOptions)
+                         ?? new List<Dictionary<string, object>>();
+
+
+        // Filter only matching subgroups
+        var matchingSubGroups = new List<Dictionary<string, object>>();
+
+        foreach (var subGroup in subGroups)
+        {
+            string subName = subGroup.TryGetValue("name", out var subNameObj) && subNameObj is JsonElement subNameElement && subNameElement.ValueKind == JsonValueKind.String
+                ? subNameElement.GetString() ?? string.Empty
+                : string.Empty;
+
+            if (userRoles.Contains(subName))
+            {
+                matchingSubGroups.Add(subGroup);
+            }
+        }
+
+        // Return the group if:
+        // - the group name matches
+        // - OR one of its subgroups matches
+        if (userRoles.Contains(groupName) || matchingSubGroups.Count > 0)
+        {
+            group["subGroups"] = matchingSubGroups;
+            return group;
+        }
+
+        return null;
+    }
+
+    public async Task<List<GroupWithUsersDto>> GetGroupsWithUsersByRolesAsync(
+    string token,
+    ClaimsPrincipal user,
+    CancellationToken cancellationToken)
+    {
+        // Extract user roles from realm_access claim
+        var userRoles = user.Claims
+            .Where(c => c.Type == "realm_access")
+            .SelectMany(c =>
+            {
+                var roles = new List<string>();
+                try
+                {
+                    var doc = JsonDocument.Parse(c.Value);
+                    if (doc.RootElement.TryGetProperty("roles", out var rolesElement))
+                    {
+                        roles.AddRange(rolesElement.EnumerateArray().Select(r => r.GetString() ?? string.Empty));
+                    }
+                }
+                catch { /* Ignore parse failures */ }
+                return roles;
+            })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<GroupWithUsersDto>();
+
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var response = await httpClient.GetAsync("groups", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var groups = await response.Content.ReadFromJsonAsync<List<Dictionary<string, object>>>(cancellationToken: cancellationToken)
+                     ?? new List<Dictionary<string, object>>();
+
+        foreach (var group in groups)
+        {
+            var groupId = group.TryGetValue("id", out var idObj) && idObj is JsonElement idEl && idEl.ValueKind == JsonValueKind.String
+                ? idEl.GetString()
+                : null;
+
+            var groupName = group.TryGetValue("name", out var nameObj) && nameObj is JsonElement nameEl && nameEl.ValueKind == JsonValueKind.String
+                ? nameEl.GetString()
+                : null;
+
+            if (!string.IsNullOrWhiteSpace(groupId) && !string.IsNullOrWhiteSpace(groupName))
+            {
+                if (!userRoles.Contains(groupName))
+                    continue;
+
+                var usersResponse = await httpClient.GetAsync($"groups/{groupId}/members", cancellationToken);
+                usersResponse.EnsureSuccessStatusCode();
+
+                var users = await usersResponse.Content.ReadFromJsonAsync<List<UserDto>>(cancellationToken: cancellationToken)
+                            ?? new List<UserDto>();
+
+                result.Add(new GroupWithUsersDto
+                {
+                    GroupId = groupId,
+                    GroupName = groupName,
+                    Users = users
+                });
+            }
+        }
+
+        return result;
     }
 }

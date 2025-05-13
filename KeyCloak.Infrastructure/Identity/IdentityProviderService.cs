@@ -1,7 +1,9 @@
 ﻿using KeyCloak.Application.Abstractions.Identity;
+using KeyCloak.Application.Groups.GetGroupWithUsers;
 using KeyCloak.Domian;
 using KeyCloak.Domian.AccountsGroups;
 using KeyCloak.Domian.Users;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Net;
@@ -14,7 +16,8 @@ namespace KeyCloak.Infrastructure.Identity;
 public sealed class IdentityProviderService(
     KeyCloakClient keyCloakClient,
     IOptions<KeyCloakOptions> options,
-    ILogger<IdentityProviderService> logger) : IIdentityProviderService
+    ILogger<IdentityProviderService> logger,
+    IConfiguration config) : IIdentityProviderService
 {
     private readonly KeyCloakOptions _options = options.Value;
 
@@ -224,7 +227,7 @@ public sealed class IdentityProviderService(
             var token = await GetAdminTokenAsync(cancellationToken);
             // Check if the group already exists
             var existingGroup = await keyCloakClient.GetGroupByNameAsync(group.Name, token, cancellationToken);
-            if (existingGroup != null)
+            if (existingGroup.Count != 0)
             {
                 logger.LogError("Group creation failed: Group with the same name already exists.");
                 return Result.Failure<string>(AccountsGroupsErrors.GroupNameIsNotUnique(group.Name));
@@ -246,11 +249,15 @@ public sealed class IdentityProviderService(
 
     public async Task<Result<string>> UpdateGroupAsync(GroupRepresentation group, CancellationToken cancellationToken = default)
     {
-        var groupRepresentation = new GroupRepresentation(group.Name, group.ParentId);
+        var groupRepresentation = new GroupRepresentation(group.Name, group.GroupId, group.ParentId);
         try
         {
             var token = await GetAdminTokenAsync(cancellationToken);
-            var identityId = await keyCloakClient.UpdateGroupAsync(groupRepresentation, token, cancellationToken);
+            if (!await keyCloakClient.UpdateGroupAsync(groupRepresentation, token, cancellationToken))
+            {
+                throw new HttpRequestException("Conflict occurred while updating the group.", null, HttpStatusCode.Conflict);
+            }
+            var identityId = group.GroupId.ToString();
             return identityId;
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
@@ -263,7 +270,6 @@ public sealed class IdentityProviderService(
             logger.LogError(ex, "Group update failed unexpectedly.");
             return Result.Failure<string>(AccountsGroupsErrors.GroupUpdateFailed(group.ParentId?.ToString() ?? "null"));
         }
-
     }
     public async Task<Result<string>> DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken = default)
     {
@@ -315,5 +321,44 @@ public sealed class IdentityProviderService(
         return await keyCloakClient.GetUsersByGroupAsync(groupClaim, token, cancellationToken);
     }
 
+    public async Task<List<Dictionary<string, object>>> GetAllGroupsAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var token = await GetAdminTokenAsync(cancellationToken);
+            return await keyCloakClient.GetAllGroupsAsync(token, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unexpected error occurred while getting admin token.");
+            throw;
+        }
+    }
+    public async Task<List<Dictionary<string, object>>> GetFilteredGroupsAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
+    {
+        string tokenUrl = config["Keycloak:TokenUrl"];
+        string clientId = config["Keycloak:ClientId"];
+        string clientSecret = config["Keycloak:ClientSecret"];
+        string adminUsername = config["Keycloak:AdminUsername"];
+        string adminPassword = config["Keycloak:AdminPassword"];
 
+        var token = await keyCloakClient.GetAdminAccessTokenAsync(tokenUrl, clientId, clientSecret, adminUsername, adminPassword, cancellationToken);
+
+        return await keyCloakClient.GetFilteredGroupsByRolesAsync(token, user, cancellationToken);
+    }
+    public async Task<List<GroupWithUsersDto>> GetGroupsWithUsersByRolesAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
+    {
+
+        try
+        {
+            var token = await GetAdminTokenAsync(cancellationToken);
+
+            return await keyCloakClient.GetGroupsWithUsersByRolesAsync(token, user, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unexpected error occurred while getting groups with users.");
+            throw;
+        }
+    }
 }
