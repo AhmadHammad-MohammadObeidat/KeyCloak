@@ -1,37 +1,55 @@
-﻿using KeyCloak.Application.Abstractions.Identity;
+﻿using System.Security.Claims;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using KeyCloak.Application;
+using KeyCloak.Application.Abstractions.Identity;
+using KeyCloak.Application.Services.GroupsService;
+using KeyCloak.Application.Services.RolesExtractionService;
+using KeyCloak.Application.Services.UsersAccount;
+using KeyCloak.Application.Services.UsersEmailService;
+using KeyCloak.Application.Users.LoginUser;
 using KeyCloak.Infrastructure.Identity;
+using KeyCloak.Infrastructure.Identity.Services.GroupsService;
+using KeyCloak.Infrastructure.Identity.Services.RolesExtractionService;
+using KeyCloak.Infrastructure.Identity.Services.UsersAccount;
+using KeyCloak.Infrastructure.Identity.Services.UsersEmailService;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Versioning;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
-using System.Security.Claims;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ✅ Register MediatR
-builder.Services.AddMediatR(cfg =>
-{
-    cfg.RegisterServicesFromAssembly(typeof(IIdentityProviderService).Assembly);
-});
-
-builder.Services.AddHttpContextAccessor();
-
-// ✅ Register Keycloak client + Identity service
+// ===== Configuration =====
 builder.Services.Configure<KeyCloakOptions>(
     builder.Configuration.GetSection("KeyCloak"));
+
+var keycloakSettings = builder.Configuration.GetSection("KeyCloak");
+
+// ===== MediatR =====
+builder.Services.AddMediatR(cfg =>
+{
+    cfg.RegisterServicesFromAssembly(typeof(ApplicationAssemblyReference).Assembly);
+
+});
+
+// ===== HttpContext + HttpClient =====
+builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddHttpClient<KeyCloakClient>(client =>
 {
     client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
 });
-builder.Services.AddScoped<IIdentityProviderService, IdentityProviderService>();
 
-// ✅ Configure JWT Bearer Authentication
-var keycloakSettings = builder.Configuration.GetSection("KeyCloak");
+// ===== Modular Identity Services =====
+builder.Services.AddScoped<IUserAccountService, UserAccountService>();
+builder.Services.AddScoped<IUserEmailService, UserEmailService>();
+builder.Services.AddScoped<IGroupManagementService, GroupManagementService>();
+builder.Services.AddScoped<IUserGroupQueryService, UserGroupQueryService>();
+builder.Services.AddScoped<IRoleExtractionService, RoleExtractionService>();
 
+// ===== Authentication: JWT Bearer =====
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -41,7 +59,7 @@ builder.Services.AddAuthentication(options =>
 {
     options.Authority = keycloakSettings["Authority"];
     options.RequireHttpsMetadata = false;
-    options.Audience = "dotnet-api-client"; // or "dotnet-api-client"
+    options.Audience = "dotnet-api-client"; // Match your Keycloak client_id
 
     options.TokenValidationParameters = new TokenValidationParameters
     {
@@ -52,7 +70,6 @@ builder.Services.AddAuthentication(options =>
         RoleClaimType = ClaimTypes.Role
     };
 
-    // ✅ Extract roles from realm_access.roles[]
     options.Events = new JwtBearerEvents
     {
         OnTokenValidated = context =>
@@ -77,14 +94,14 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// ✅ Authorization policies
+// ===== Authorization Policies =====
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("GroupViewerPolicy", policy =>
         policy.RequireAuthenticatedUser().RequireRole("group-viewer"));
 });
 
-// ✅ API Versioning
+// ===== API Versioning =====
 builder.Services.AddApiVersioning(options =>
 {
     options.DefaultApiVersion = new ApiVersion(1, 0);
@@ -93,7 +110,7 @@ builder.Services.AddApiVersioning(options =>
     options.ApiVersionReader = new UrlSegmentApiVersionReader();
 });
 
-// ✅ Register controllers
+// ===== Controllers =====
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -101,7 +118,7 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
     });
 
-// ✅ Swagger with JWT auth support
+// ===== Swagger (with JWT support) =====
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -133,9 +150,9 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+// ===== Build and Run =====
 var app = builder.Build();
 
-// ✅ Middleware pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -145,7 +162,5 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers();
-
 app.Run();

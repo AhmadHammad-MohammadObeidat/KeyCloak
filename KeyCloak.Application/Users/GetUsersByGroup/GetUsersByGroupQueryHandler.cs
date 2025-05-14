@@ -1,19 +1,19 @@
-﻿using KeyCloak.Application.Abstractions.Identity;
-using KeyCloak.Domian.Users;
+﻿using KeyCloak.Domian.Users;
 using KeyCloak.Domian;
 using KeyCloak.Application.Messaging;
+using KeyCloak.Application.Services.GroupsService;
 
 namespace KeyCloak.Application.Users.GetUsersByGroup;
 
 internal sealed class GetUsersByGroupQueryHandler(
-IIdentityProviderService identityProviderService)
+IUserGroupQueryService userGroupQueryService)
 : IQueryHandler<GetUsersByGroupQuery, Result<List<User>>>
 {
     public async Task<Result<List<User>>> Handle(GetUsersByGroupQuery query, CancellationToken cancellationToken)
     {
         try
         {
-            var userDtos = await identityProviderService.GetUsersInCallerGroupAsync(query.UserPrincipal, cancellationToken);
+            var userDtos = await userGroupQueryService.GetUsersInCallerGroupAsync(query.UserPrincipal, cancellationToken);
             var users = userDtos.Select(User.FromDto).ToList();
             return Result.Success(users);
         }
