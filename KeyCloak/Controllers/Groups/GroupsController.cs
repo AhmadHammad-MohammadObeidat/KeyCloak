@@ -1,14 +1,9 @@
-﻿using KeyCloak.Api.Controllers.Users;
-using KeyCloak.Application.Groups;
-using KeyCloak.Application.Groups.CreateGroup;
+﻿using KeyCloak.Application.Groups.CreateGroup;
 using KeyCloak.Application.Groups.DeleteGroup;
 using KeyCloak.Application.Groups.GetAllGroups;
 using KeyCloak.Application.Groups.GetGroup;
 using KeyCloak.Application.Groups.GetGroupWithUsers;
 using KeyCloak.Application.Groups.UpdateGroup;
-using KeyCloak.Application.Users.RegisterUser;
-using KeyCloak.Domian;
-using KeyCloak.Infrastructure.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -70,7 +65,7 @@ public class GroupsController(ISender sender) : ControllerBase
     }
 
     [HttpGet("get-all-groups")]
-    [AllowAnonymous]
+    [Authorize(Policy = "GroupViewerPolicy")]
     [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(List<Dictionary<string, object>>))]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
@@ -86,7 +81,7 @@ public class GroupsController(ISender sender) : ControllerBase
     }
 
     [HttpGet("get-groups")]
-    [AllowAnonymous]
+    [Authorize(Policy = "GroupViewerPolicy")]
     [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(List<Dictionary<string, object>>))]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
@@ -97,7 +92,7 @@ public class GroupsController(ISender sender) : ControllerBase
     }
 
     [HttpGet("get-groups-with-users")]
-    [AllowAnonymous]
+    [Authorize(Policy = "GroupViewerPolicy")]
     [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(List<Dictionary<string, object>>))]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]

@@ -31,8 +31,7 @@ public sealed class IdentityProviderService(
     {
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
-            var result = await keyCloakClient.ResendConfirmationEmailAsync(email, _options.AdminUrl, token, cancellationToken);
+            var result = await keyCloakClient.ResendConfirmationEmailAsync(email, _options.AdminUrl, cancellationToken);
             return result;
         }
         catch (Exception ex)
@@ -46,8 +45,7 @@ public sealed class IdentityProviderService(
     {
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
-            var result = await keyCloakClient.ForgotPasswordAsync(email, _options.AdminUrl, token, cancellationToken);
+            var result = await keyCloakClient.ForgotPasswordAsync(email, _options.AdminUrl, cancellationToken);
             return result;
         }
         catch (Exception ex)
@@ -115,12 +113,10 @@ public sealed class IdentityProviderService(
 
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
+            var userId = await keyCloakClient.RegisterUserAsync(userRepresentation, cancellationToken);
 
-            var userId = await keyCloakClient.RegisterUserAsync(userRepresentation, token, cancellationToken);
-
-            var groupId = await keyCloakClient.CreateGroupIfNotExistsAsync(groupName, token, cancellationToken);
-            await keyCloakClient.AssignUserToGroupAsync(userId, groupId, token, cancellationToken);
+            var groupId = await keyCloakClient.CreateGroupIfNotExistsAsync(groupName, cancellationToken);
+            await keyCloakClient.AssignUserToGroupAsync(userId, groupId, cancellationToken);
 
             return userId;
         }
@@ -154,20 +150,18 @@ public sealed class IdentityProviderService(
 
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
-
             // Step 1: Register the admin user
-            var userId = await keyCloakClient.RegisterUserAsync(userRepresentation, token, cancellationToken);
+            var userId = await keyCloakClient.RegisterUserAsync(userRepresentation, cancellationToken);
 
             // Step 2: Create group if not exists
-            var groupId = await keyCloakClient.CreateGroupIfNotExistsAsync(targetGroup, token, cancellationToken);
+            var groupId = await keyCloakClient.CreateGroupIfNotExistsAsync(targetGroup, cancellationToken);
 
             // Step 3: Assign user to group
-            await keyCloakClient.AssignUserToGroupAsync(userId, groupId, token, cancellationToken);
+            await keyCloakClient.AssignUserToGroupAsync(userId, groupId, cancellationToken);
 
             // Step 4: Assign group-admin-* role
             var roleName = $"group-admin-{targetGroup.ToLower()}";
-            await keyCloakClient.AssignRealmRoleToUserAsync(userId, roleName, token, cancellationToken);
+            await keyCloakClient.AssignRealmRoleToUserAsync(userId, roleName, cancellationToken);
 
             return userId;
         }
@@ -202,8 +196,7 @@ public sealed class IdentityProviderService(
 
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
-            var identityId = await keyCloakClient.RegisterUserAsync(userRepresentation, token, cancellationToken);
+            var identityId = await keyCloakClient.RegisterUserAsync(userRepresentation, cancellationToken);
             return identityId;
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
@@ -224,15 +217,15 @@ public sealed class IdentityProviderService(
 
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
             // Check if the group already exists
-            var existingGroup = await keyCloakClient.GetGroupByNameAsync(group.Name, token, cancellationToken);
+            var existingGroup = await keyCloakClient.GetGroupByNameAsync(group.Name, cancellationToken);
+
             if (existingGroup.Count != 0)
             {
                 logger.LogError("Group creation failed: Group with the same name already exists.");
                 return Result.Failure<string>(AccountsGroupsErrors.GroupNameIsNotUnique(group.Name));
             }
-            var identityId = await keyCloakClient.CreateGroupAsync(groupRepresentation, token, cancellationToken);
+            var identityId = await keyCloakClient.CreateGroupAsync(groupRepresentation, cancellationToken);
             return identityId;
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
@@ -252,8 +245,7 @@ public sealed class IdentityProviderService(
         var groupRepresentation = new GroupRepresentation(group.Name, group.GroupId, group.ParentId);
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
-            if (!await keyCloakClient.UpdateGroupAsync(groupRepresentation, token, cancellationToken))
+            if (!await keyCloakClient.UpdateGroupAsync(groupRepresentation, cancellationToken))
             {
                 throw new HttpRequestException("Conflict occurred while updating the group.", null, HttpStatusCode.Conflict);
             }
@@ -275,8 +267,7 @@ public sealed class IdentityProviderService(
     {
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
-            var identityId = await keyCloakClient.DeleteGroupAsync(groupId, token, cancellationToken);
+            var identityId = await keyCloakClient.DeleteGroupAsync(groupId, cancellationToken);
             return identityId;
 
         }
@@ -287,46 +278,20 @@ public sealed class IdentityProviderService(
         }
     }
 
-    private async Task<string> GetAdminTokenAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await keyCloakClient.GetAdminAccessTokenAsync(
-                _options.TokenUrl,
-                _options.ClientId,
-                _options.ClientSecret,
-                _options.AdminUsername,
-                _options.AdminPassword,
-                cancellationToken);
-        }
-        catch (HttpRequestException ex)
-        {
-            var message = $"Failed to get admin token from Keycloak. Status: {ex.StatusCode}";
-            logger.LogError(ex, message);
-            throw new UnauthorizedAccessException(message, ex);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error occurred while getting admin token.");
-            throw;
-        }
-    }
     public async Task<List<UserDto>> GetUsersInCallerGroupAsync(ClaimsPrincipal userPrincipal, CancellationToken cancellationToken)
     {
         var groupClaim = userPrincipal.Claims.FirstOrDefault(c => c.Type == "groups")?.Value;
         if (string.IsNullOrWhiteSpace(groupClaim))
             return new List<UserDto>();
 
-        var token = await GetAdminTokenAsync(cancellationToken);
-        return await keyCloakClient.GetUsersByGroupAsync(groupClaim, token, cancellationToken);
+        return await keyCloakClient.GetUsersByGroupAsync(groupClaim, cancellationToken);
     }
 
     public async Task<List<Dictionary<string, object>>> GetAllGroupsAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            var token = await GetAdminTokenAsync(cancellationToken);
-            return await keyCloakClient.GetAllGroupsAsync(token, cancellationToken);
+            return await keyCloakClient.GetAllGroupsAsync(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -336,29 +301,43 @@ public sealed class IdentityProviderService(
     }
     public async Task<List<Dictionary<string, object>>> GetFilteredGroupsAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
-        string tokenUrl = config["Keycloak:TokenUrl"];
-        string clientId = config["Keycloak:ClientId"];
-        string clientSecret = config["Keycloak:ClientSecret"];
-        string adminUsername = config["Keycloak:AdminUsername"];
-        string adminPassword = config["Keycloak:AdminPassword"];
+        var userRoles = ExtractRealmRoles(user);
+        if (!userRoles.Contains("group-viewer"))
+            throw new UnauthorizedAccessException("Access denied. Missing group-viewer role.");
 
-        var token = await keyCloakClient.GetAdminAccessTokenAsync(tokenUrl, clientId, clientSecret, adminUsername, adminPassword, cancellationToken);
-
-        return await keyCloakClient.GetFilteredGroupsByRolesAsync(token, user, cancellationToken);
+        return await keyCloakClient.GetFilteredGroupsByRolesAsync(user, cancellationToken);
     }
     public async Task<List<GroupWithUsersDto>> GetGroupsWithUsersByRolesAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
+        var userRoles = ExtractRealmRoles(user);
+        if (!userRoles.Contains("group-viewer"))
+            throw new UnauthorizedAccessException("Access denied. Missing group-viewer role.");
 
-        try
-        {
-            var token = await GetAdminTokenAsync(cancellationToken);
+        var token = String.Empty;
+        //var token = await GetAdminTokenAsync(cancellationToken);
+        return await keyCloakClient.GetGroupsWithUsersByRolesAsync(token, user, cancellationToken);
+    }
 
-            return await keyCloakClient.GetGroupsWithUsersByRolesAsync(token, user, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error occurred while getting groups with users.");
-            throw;
-        }
+    private static HashSet<string> ExtractRealmRoles(ClaimsPrincipal user)
+    {
+        return user.Claims
+            .Where(c => c.Type == "realm_access")
+            .SelectMany(c =>
+            {
+                try
+                {
+                    var roles = new List<string>();
+                    var doc = JsonDocument.Parse(c.Value);
+                    if (doc.RootElement.TryGetProperty("roles", out var rolesElement))
+                        roles.AddRange(rolesElement.EnumerateArray().Select(x => x.GetString() ?? string.Empty));
+                    return roles;
+                }
+                catch
+                {
+                    return new List<string>();
+                }
+            })
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 }
