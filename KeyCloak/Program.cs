@@ -2,13 +2,13 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KeyCloak.Application;
-using KeyCloak.Application.Abstractions.Identity;
 using KeyCloak.Application.Services.GroupsService;
 using KeyCloak.Application.Services.RolesExtractionService;
 using KeyCloak.Application.Services.UsersAccount;
 using KeyCloak.Application.Services.UsersEmailService;
-using KeyCloak.Application.Users.LoginUser;
 using KeyCloak.Infrastructure.Identity;
+using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakAuthClients;
+using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakUserClients;
 using KeyCloak.Infrastructure.Identity.Services.GroupsService;
 using KeyCloak.Infrastructure.Identity.Services.RolesExtractionService;
 using KeyCloak.Infrastructure.Identity.Services.UsersAccount;
@@ -27,6 +27,25 @@ builder.Services.Configure<KeyCloakOptions>(
 
 var keycloakSettings = builder.Configuration.GetSection("KeyCloak");
 
+
+// ===== HttpContext + HttpClient =====
+
+builder.Services.AddHttpContextAccessor();
+
+// Register Keycloak HTTP clients
+builder.Services.AddHttpClient<KeycloakAuthClient>(client =>
+{
+    client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
+});
+builder.Services.AddHttpClient<KeycloakUserClient>(client =>
+{
+    client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
+});
+builder.Services.AddHttpClient<KeycloakGroupClient>(client =>
+{
+    client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
+});
+
 // ===== MediatR =====
 builder.Services.AddMediatR(cfg =>
 {
@@ -35,7 +54,6 @@ builder.Services.AddMediatR(cfg =>
 });
 
 // ===== HttpContext + HttpClient =====
-builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddHttpClient<KeyCloakClient>(client =>
 {

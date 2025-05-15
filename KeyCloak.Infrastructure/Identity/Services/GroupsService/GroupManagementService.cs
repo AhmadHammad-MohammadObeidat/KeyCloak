@@ -6,18 +6,18 @@ using KeyCloak.Application.Services.GroupsService;
 
 namespace KeyCloak.Infrastructure.Identity.Services.GroupsService;
 
-public sealed class GroupManagementService(KeyCloakClient _keyCloakClient, ILogger<GroupManagementService> _logger) : IGroupManagementService
+public sealed class GroupManagementService(KeycloakGroupClient _keyCloakGroupClient, ILogger<GroupManagementService> _logger) : IGroupManagementService
 {
     public async Task<Result<string>> CreateGroupAsync(GroupRepresentation group, CancellationToken cancellationToken = default)
     {
         try
         {
-            var existingGroup = await _keyCloakClient.GetGroupByNameAsync(group.Name, cancellationToken);
+            var existingGroup = await _keyCloakGroupClient.GetGroupByNameAsync(group.Name, cancellationToken);
             if (existingGroup.Count != 0)
             {
                 return Result.Failure<string>(AccountsGroupsErrors.GroupNameIsNotUnique(group.Name));
             }
-            return await _keyCloakClient.CreateGroupAsync(group, cancellationToken);
+            return await _keyCloakGroupClient.CreateGroupAsync(group, cancellationToken);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
         {
@@ -35,7 +35,7 @@ public sealed class GroupManagementService(KeyCloakClient _keyCloakClient, ILogg
     {
         try
         {
-            if (!await _keyCloakClient.UpdateGroupAsync(group, cancellationToken))
+            if (!await _keyCloakGroupClient.UpdateGroupAsync(group, cancellationToken))
             {
                 throw new HttpRequestException("Group update conflict.", null, HttpStatusCode.Conflict);
             }
@@ -57,7 +57,7 @@ public sealed class GroupManagementService(KeyCloakClient _keyCloakClient, ILogg
     {
         try
         {
-            return await _keyCloakClient.DeleteGroupAsync(groupId, cancellationToken);
+            return await _keyCloakGroupClient.DeleteGroupAsync(groupId, cancellationToken);
         }
         catch (Exception ex)
         {
