@@ -1,10 +1,10 @@
-﻿using KeyCloak.Application.Abstractions.Identity;
+﻿using KeyCloak.Application.Services.GroupsService;
 using MediatR;
 using System.Text.Json;
 
 namespace KeyCloak.Application.Groups.GetGroupWithUsers;
 
-public class GetGroupsWithUsersQueryHandler(IIdentityProviderService identityProviderService)
+public class GetGroupsWithUsersQueryHandler(IUserGroupQueryService userGroupQueryService)
     : IRequestHandler<GetGroupsWithUsersQuery, List<GroupWithUsersDto>>
 {
     public async Task<List<GroupWithUsersDto>> Handle(GetGroupsWithUsersQuery request, CancellationToken cancellationToken)
@@ -29,6 +29,6 @@ public class GetGroupsWithUsersQueryHandler(IIdentityProviderService identityPro
         if (userRoles == null || !userRoles.Contains("group-viewer"))
             throw new UnauthorizedAccessException("Access denied. Missing group-viewer role.");
 
-        return await identityProviderService.GetGroupsWithUsersByRolesAsync(request.User, cancellationToken);
+        return await userGroupQueryService.GetGroupsWithUsersByRolesAsync(request.User, cancellationToken);
     }
 }

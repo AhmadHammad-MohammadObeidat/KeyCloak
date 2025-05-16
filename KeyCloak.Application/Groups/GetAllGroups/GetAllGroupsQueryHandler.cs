@@ -1,15 +1,12 @@
-﻿using KeyCloak.Application.Abstractions.Identity;
-using KeyCloak.Application.Messaging;
-using KeyCloak.Application.Users.GetUsersByGroup;
-using KeyCloak.Domian.Users;
+﻿using KeyCloak.Application.Messaging;
 using KeyCloak.Domian;
 using MediatR;
-using System.Security.Claims;
+using KeyCloak.Application.Services.GroupsService;
 
 namespace KeyCloak.Application.Groups.GetAllGroups;
 
 internal sealed class GetAllGroupsQueryHandler(
-IIdentityProviderService identityProviderService)
+IUserGroupQueryService userGroupQueryService)
 : IQueryHandler<GetAllGroupsQuery, Result<List<Dictionary<string, object>>>>,
   IRequestHandler<GetAllGroupsQuery, Result<List<Dictionary<string, object>>>>
 {
@@ -17,7 +14,7 @@ IIdentityProviderService identityProviderService)
     {
         try
         {
-            var allGroups = await identityProviderService.GetAllGroupsAsync(cancellationToken);
+            var allGroups = await userGroupQueryService.GetAllGroupsAsync(cancellationToken);
             return Result.Success(allGroups);
         }
         catch (Exception ex)
