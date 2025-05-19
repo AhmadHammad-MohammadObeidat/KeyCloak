@@ -2,6 +2,7 @@
 using KeyCloak.Application.Services.GroupsService;
 using KeyCloak.Application.Services.RolesExtractionService;
 using KeyCloak.Domian.Users;
+using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakGroupClients;
 using Microsoft.Extensions.Logging;
 using System.Security.Claims;
 

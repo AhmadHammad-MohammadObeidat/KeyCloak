@@ -5,12 +5,5 @@ using KeyCloak.Application.Messaging;
 
 namespace KeyCloak.Application.Users.GetUsersByGroup;
 
-public sealed class GetUsersByGroupQuery : IQuery<Result<List<User>>>
-{
-    public GetUsersByGroupQuery(ClaimsPrincipal userPrincipal)
-    {
-        UserPrincipal = userPrincipal;
-    }
+public sealed record GetUsersByGroupQuery(ClaimsPrincipal User) : IQuery<Result<List<UserDto>>>;
 
-    public ClaimsPrincipal UserPrincipal { get; }
-}

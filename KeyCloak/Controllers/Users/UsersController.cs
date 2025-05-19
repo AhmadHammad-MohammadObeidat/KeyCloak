@@ -1,5 +1,4 @@
-﻿using KeyCloak.Api.Controllers.Users;
-using KeyCloak.Application.Abstractions.Identity;
+﻿using KeyCloak.Application.Abstractions.Identity;
 using KeyCloak.Application.Users.ForgotPassword;
 using KeyCloak.Application.Users.GetUsersByGroup;
 using KeyCloak.Application.Users.LoginUser;
@@ -13,7 +12,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace TraderVolt.ApiService.Controllers.Users;
+namespace KeyCloak.Api.Controllers.Users;
 
 [ApiController]
 [Authorize]

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using System.Net;
 using KeyCloak.Application.Services.UsersAccount;
 using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakAuthClients;
+using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakGroupClients;
 
 namespace KeyCloak.Infrastructure.Identity.Services.UsersAccount;
 
