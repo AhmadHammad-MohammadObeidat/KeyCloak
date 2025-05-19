@@ -3,6 +3,7 @@ using KeyCloak.Domian;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using KeyCloak.Application.Services.GroupsService;
+using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakGroupClients;
 
 namespace KeyCloak.Infrastructure.Identity.Services.GroupsService;
 

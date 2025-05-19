@@ -18,21 +18,23 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Versioning;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using KeyCloak.Application.Services.DealersService;
+using KeyCloak.Infrastructure.Identity.Services.DealersService;
+using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakDealersClients;
+using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakGroupClients;
+using Microsoft.AspNetCore.Authorization;
+using KeyCloak.Application.Permissions;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ===== Configuration =====
-builder.Services.Configure<KeyCloakOptions>(
-    builder.Configuration.GetSection("KeyCloak"));
-
+builder.Services.Configure<KeyCloakOptions>(builder.Configuration.GetSection("KeyCloak"));
 var keycloakSettings = builder.Configuration.GetSection("KeyCloak");
 
-
-// ===== HttpContext + HttpClient =====
-
+// ===== HttpContext Accessor =====
 builder.Services.AddHttpContextAccessor();
 
-// Register Keycloak HTTP clients
+// ===== HTTP Clients =====
 builder.Services.AddHttpClient<KeycloakAuthClient>(client =>
 {
     client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
@@ -45,27 +47,30 @@ builder.Services.AddHttpClient<KeycloakGroupClient>(client =>
 {
     client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
 });
+builder.Services.AddHttpClient<KeyCloakClient>(client =>
+{
+    client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
+});
+builder.Services.AddHttpClient<KeycloakDealerClient>(client =>
+{
+    client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
+});
 
 // ===== MediatR =====
 builder.Services.AddMediatR(cfg =>
 {
     cfg.RegisterServicesFromAssembly(typeof(ApplicationAssemblyReference).Assembly);
-
 });
 
-// ===== HttpContext + HttpClient =====
-
-builder.Services.AddHttpClient<KeyCloakClient>(client =>
-{
-    client.BaseAddress = new Uri("http://localhost:8080/admin/realms/KeyCloakDotNetReleam/");
-});
-
-// ===== Modular Identity Services =====
+// ===== Application Services =====
 builder.Services.AddScoped<IUserAccountService, UserAccountService>();
 builder.Services.AddScoped<IUserEmailService, UserEmailService>();
 builder.Services.AddScoped<IGroupManagementService, GroupManagementService>();
 builder.Services.AddScoped<IUserGroupQueryService, UserGroupQueryService>();
 builder.Services.AddScoped<IRoleExtractionService, RoleExtractionService>();
+
+// ===== Dealer Management =====
+builder.Services.AddScoped<IDealerManagementService, DealerManagementService>();
 
 // ===== Authentication: JWT Bearer =====
 builder.Services.AddAuthentication(options =>
@@ -115,9 +120,22 @@ builder.Services.AddAuthentication(options =>
 // ===== Authorization Policies =====
 builder.Services.AddAuthorization(options =>
 {
+    // Basic role-based policy
     options.AddPolicy("GroupViewerPolicy", policy =>
         policy.RequireAuthenticatedUser().RequireRole("group-viewer"));
+
+    // Keycloak permission-based policy with super-admin bypass
+    options.AddPolicy("view-dealer-management", policy =>
+        policy.RequireAssertion(context =>
+            context.User.IsInRole("super-admin") || // Allow super-admin to bypass
+            context.Requirements.Any(req => req is KeycloakPermissionRequirement)));
 });
+
+// We still need this for other users
+builder.Services.AddSingleton<IAuthorizationHandler, KeycloakPermissionHandler>();
+
+// Register the authorization handler for Keycloak permissions
+builder.Services.AddSingleton<IAuthorizationHandler, KeycloakPermissionHandler>();
 
 // ===== API Versioning =====
 builder.Services.AddApiVersioning(options =>
@@ -136,7 +154,7 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
     });
 
-// ===== Swagger (with JWT support) =====
+// ===== Swagger =====
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -168,7 +186,7 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// ===== Build and Run =====
+// ===== App Pipeline =====
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())

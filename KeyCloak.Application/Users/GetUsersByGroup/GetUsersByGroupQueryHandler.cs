@@ -5,21 +5,12 @@ using KeyCloak.Application.Services.GroupsService;
 
 namespace KeyCloak.Application.Users.GetUsersByGroup;
 
-internal sealed class GetUsersByGroupQueryHandler(
-IUserGroupQueryService userGroupQueryService)
-: IQueryHandler<GetUsersByGroupQuery, Result<List<User>>>
+public class GetUsersByGroupQueryHandler(IUserGroupQueryService userGroupQueryService) : IQueryHandler<GetUsersByGroupQuery, Result<List<UserDto>>>
 {
-    public async Task<Result<List<User>>> Handle(GetUsersByGroupQuery query, CancellationToken cancellationToken)
+
+    public async Task<Result<List<UserDto>>> Handle(GetUsersByGroupQuery request, CancellationToken cancellationToken)
     {
-        try
-        {
-            var userDtos = await userGroupQueryService.GetUsersInCallerGroupAsync(query.UserPrincipal, cancellationToken);
-            var users = userDtos.Select(User.FromDto).ToList();
-            return Result.Success(users);
-        }
-        catch (Exception ex)
-        {
-            return Result.Failure<List<User>>(UsersErrors.FailedToRetrieveUsers());
-        }
+        var users = await userGroupQueryService.GetUsersInCallerGroupAsync(request.User, cancellationToken);
+        return Result.Success(users); // users must already be List<UserDto>
     }
 }

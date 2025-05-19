@@ -1,0 +1,26 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace KeyCloak.Domian.Dealers;
+
+public class DealerWithGroupsDto
+{
+    public string DealerId { get; set; } = default!;
+    public string DealerName { get; set; } = default!;
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public string? Email { get; set; }
+    public List<string> Roles { get; set; } = new();
+    public List<GroupInfoDto> Groups { get; set; } = new();
+}
+
+public class GroupInfoDto
+{
+    public string GroupId { get; set; } = default!;
+    public string GroupName { get; set; } = default!;
+    public string? SubGroupId { get; set; }
+    public string? SubGroupName { get; set; }
+}

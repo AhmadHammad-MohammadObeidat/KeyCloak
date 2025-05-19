@@ -9,7 +9,7 @@ using KeyCloak.Application.Groups.GetGroupWithUsers;
 using Microsoft.AspNetCore.Http;
 using System.Net;
 
-namespace KeyCloak.Infrastructure.Identity;
+namespace KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakGroupClients;
 
 public sealed class KeycloakGroupClient(HttpClient httpClient, IHttpContextAccessor httpContextAccessor)
 {
