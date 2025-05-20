@@ -174,111 +174,99 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
         }
     }
 
-    public async Task<List<DealerWithGroupsDto>> GetDealersWithGroupsAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
+    public async Task<List<DealerWithGroupsDto>> GetDealersWithGroupsAsync(ClaimsPrincipal userPrincipal, CancellationToken cancellationToken)
     {
         SetAuthHeader();
         var result = new Dictionary<string, DealerWithGroupsDto>();
 
-        var roles = new List<string>();
-
-        var realmAccessClaim = user.FindFirst("realm_access")?.Value;
-        if (!string.IsNullOrWhiteSpace(realmAccessClaim))
-        {
-            using var json = JsonDocument.Parse(realmAccessClaim);
-            if (json.RootElement.TryGetProperty("roles", out var rolesElement) &&
-                rolesElement.ValueKind == JsonValueKind.Array)
-            {
-                roles = rolesElement.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-            }
-        }
-
-        var userId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "sub")?.Value;
+        var userId = userPrincipal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "sub")?.Value;
         if (string.IsNullOrWhiteSpace(userId))
             return [];
 
+        var roles = ExtractRealmRoles(userPrincipal);
         var isSuperAdmin = roles.Contains("super-admin");
-        var isAdmin = roles.Contains("admin") || isSuperAdmin;
+        var isAdmin = isSuperAdmin || roles.Contains("admin");
 
         if (!isAdmin)
             return [];
 
-        // Get user's groups
-        var userGroupsResponse = await httpClient.GetAsync($"users/{userId}/groups", cancellationToken);
-        userGroupsResponse.EnsureSuccessStatusCode();
-        var userGroups = await userGroupsResponse.Content.ReadFromJsonAsync<List<KeycloakGroup>>(cancellationToken: cancellationToken) ?? [];
-
-        // Case 1: Super-admin with no groups - return all admins with their groups
-        if (isSuperAdmin && !userGroups.Any())
+        try
         {
-            // Get all users
-            var usersResponse = await httpClient.GetAsync("users", cancellationToken);
-            usersResponse.EnsureSuccessStatusCode();
-            var allUsers = await usersResponse.Content.ReadFromJsonAsync<List<UserRepresentation>>(cancellationToken: cancellationToken) ?? [];
+            var adminUsers = await GetUsersByRoleAsync("admin", cancellationToken);
+            var superAdminUsers = await GetUsersByRoleAsync("super-admin", cancellationToken);
 
-            foreach (var userRecord in allUsers)
+            // Union of both sets by user ID
+            var uniqueUsers = adminUsers.Concat(superAdminUsers)
+                                        .GroupBy(u => u.Id)
+                                        .Select(g => g.First())
+                                        .ToList();
+
+            foreach (var user in uniqueUsers)
             {
-                // Check if user is admin or super-admin
-                var rolesResponse = await httpClient.GetAsync($"users/{userRecord.Id}/role-mappings/realm", cancellationToken);
-                rolesResponse.EnsureSuccessStatusCode();
-                var userRoles = await rolesResponse.Content.ReadFromJsonAsync<List<RoleRepresentation>>(cancellationToken: cancellationToken) ?? [];
+                var dealerName = string.IsNullOrEmpty(user.FirstName) && string.IsNullOrEmpty(user.LastName)
+                    ? user.Username
+                    : $"{user.FirstName} {user.LastName}";
 
-                bool isUserAdmin = userRoles.Any(r =>
-                    r.Name.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
-                    r.Name.Equals("super-admin", StringComparison.OrdinalIgnoreCase));
-
-                if (!isUserAdmin)
-                    continue;
-
-                // Get admin's groups
-                var adminGroupsResponse = await httpClient.GetAsync($"users/{userRecord.Id}/groups", cancellationToken);
-                adminGroupsResponse.EnsureSuccessStatusCode();
-                var adminGroups = await adminGroupsResponse.Content.ReadFromJsonAsync<List<KeycloakGroup>>(cancellationToken: cancellationToken) ?? [];
-
-                if (!result.ContainsKey(userRecord.Id))
+                var dealer = new DealerWithGroupsDto
                 {
-                    result[userRecord.Id] = new DealerWithGroupsDto
+                    DealerId = user.Id,
+                    DealerName = dealerName,
+                    Groups = new List<GroupInfoDto>()
+                };
+
+                var userGroupsResponse = await httpClient.GetAsync($"users/{user.Id}/groups", cancellationToken);
+                if (userGroupsResponse.IsSuccessStatusCode)
+                {
+                    var userGroups = await userGroupsResponse.Content.ReadFromJsonAsync<List<KeycloakGroup>>(cancellationToken: cancellationToken) ?? [];
+
+                    foreach (var group in userGroups)
                     {
-                        DealerId = userRecord.Id,
-                        FirstName = userRecord.FirstName,
-                        LastName = userRecord.LastName,
-                        Email = userRecord.Email,
-                        Roles = userRoles.Select(r => r.Name).ToList(),
-                        Groups = new List<GroupInfoDto>()
-                    };
+                        dealer.Groups.Add(new GroupInfoDto
+                        {
+                            GroupId = group.Id,
+                            GroupName = group.Name,
+                            GroupPath = group.Path
+                        });
+                    }
                 }
 
-                // Add groups to admin
-                foreach (var group in adminGroups)
-                {
-                    result[userRecord.Id].Groups.Add(new GroupInfoDto
-                    {
-                        GroupId = group.Id,
-                        GroupName = group.Name
-                    });
-                }
+                result[user.Id] = dealer;
             }
+
+            return result.Values.ToList();
         }
-        // Case 2: Admin with groups - return admins in those groups with their groups and subgroups
-        else if (userGroups.Any())
+        catch (Exception ex)
         {
-            var processedGroups = new HashSet<string>();
-
-            foreach (var group in userGroups)
-            {
-                // Get detailed group information including subgroups
-                var groupDetailsResponse = await httpClient.GetAsync($"groups/{group.Id}", cancellationToken);
-                groupDetailsResponse.EnsureSuccessStatusCode();
-
-                var groupDetails = await groupDetailsResponse.Content.ReadFromJsonAsync<Dictionary<string, object>>(JsonOptions, cancellationToken);
-                if (groupDetails is not null)
-                {
-                    await CollectAdminsInGroupRecursively(groupDetails, result, processedGroups, cancellationToken);
-                }
-            }
+            Console.WriteLine($"Error fetching dealers with groups: {ex.Message}");
+            return [];
         }
-
-        return result.Values.ToList();
     }
+
+    private List<string> ExtractRealmRoles(ClaimsPrincipal user)
+    {
+        var roles = new List<string>();
+        var realmAccess = user.FindFirst("realm_access")?.Value;
+        if (!string.IsNullOrWhiteSpace(realmAccess))
+        {
+            using var doc = JsonDocument.Parse(realmAccess);
+            if (doc.RootElement.TryGetProperty("roles", out var rolesElem) && rolesElem.ValueKind == JsonValueKind.Array)
+            {
+                roles = rolesElem.EnumerateArray().Select(r => r.GetString()).Where(r => !string.IsNullOrWhiteSpace(r)).ToList()!;
+            }
+        }
+        return roles;
+    }
+
+    private async Task<List<UserRepresentation>> GetUsersByRoleAsync(string roleName, CancellationToken cancellationToken)
+{
+    SetAuthHeader();
+
+    var response = await httpClient.GetAsync($"roles/{roleName}/users", cancellationToken);
+    response.EnsureSuccessStatusCode();
+
+    var users = await response.Content.ReadFromJsonAsync<List<UserRepresentation>>(cancellationToken: cancellationToken) ?? [];
+    return users;
+}
 
     private async Task CollectGroupWithAdminsRecursively(
     Dictionary<string, object> group,
@@ -310,6 +298,7 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
             });
         }
 
+        // Process subgroups recursively
         if (group.TryGetValue("subGroups", out var subGroupsObj) && subGroupsObj is JsonElement subGroupsElement && subGroupsElement.ValueKind == JsonValueKind.Array)
         {
             foreach (var subGroup in subGroupsElement.EnumerateArray())
@@ -324,30 +313,37 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
     }
 
     private async Task CollectAdminsInGroupRecursively(
-        Dictionary<string, object> group,
-        Dictionary<string, DealerWithGroupsDto> result,
-        HashSet<string> processedGroups,
-        CancellationToken cancellationToken)
+    Dictionary<string, object> group,
+    Dictionary<string, DealerWithGroupsDto> result,
+    HashSet<string> processedGroups,
+    CancellationToken cancellationToken,
+    string? parentPath = null)
     {
         if (!TryGetGroupId(group, out var groupId) || !TryGetGroupName(group, out var groupName))
             return;
 
-        // Skip if we've already processed this group
         if (processedGroups.Contains(groupId))
             return;
 
         processedGroups.Add(groupId);
 
-        // Get all members in the group
+        // Build group path
+        var groupPath = string.IsNullOrEmpty(parentPath)
+            ? groupName
+            : $"{parentPath} / {groupName}";
+
+        // === Get all users in this group ===
         var groupMembersResponse = await httpClient.GetAsync($"groups/{groupId}/members", cancellationToken);
         groupMembersResponse.EnsureSuccessStatusCode();
+
         var groupMembers = await groupMembersResponse.Content.ReadFromJsonAsync<List<UserRepresentation>>(cancellationToken: cancellationToken) ?? [];
 
         foreach (var member in groupMembers)
         {
-            // Check if member is admin or super-admin
+            // Fetch roles for the user
             var rolesResponse = await httpClient.GetAsync($"users/{member.Id}/role-mappings/realm", cancellationToken);
             rolesResponse.EnsureSuccessStatusCode();
+
             var userRoles = await rolesResponse.Content.ReadFromJsonAsync<List<RoleRepresentation>>(cancellationToken: cancellationToken) ?? [];
 
             bool isUserAdmin = userRoles.Any(r =>
@@ -357,7 +353,7 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
             if (!isUserAdmin)
                 continue;
 
-            // Add admin if not already in result
+            // Initialize dealer if not already added
             if (!result.ContainsKey(member.Id))
             {
                 result[member.Id] = new DealerWithGroupsDto
@@ -371,18 +367,19 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
                 };
             }
 
-            // Add current group to admin's groups if not already there
+            // Add this group to user's group list if not already added
             if (!result[member.Id].Groups.Any(g => g.GroupId == groupId))
             {
                 result[member.Id].Groups.Add(new GroupInfoDto
                 {
                     GroupId = groupId,
-                    GroupName = groupName
+                    GroupName = groupName,
+                    GroupPath = groupPath
                 });
             }
         }
 
-        // Process subgroups recursively
+        // === Process subGroups recursively ===
         if (group.TryGetValue("subGroups", out var subGroupsObj) &&
             subGroupsObj is JsonElement subGroupsElement &&
             subGroupsElement.ValueKind == JsonValueKind.Array)
@@ -392,11 +389,14 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
                 var subGroupDict = JsonSerializer.Deserialize<Dictionary<string, object>>(subGroup.GetRawText(), JsonOptions);
                 if (subGroupDict is not null)
                 {
-                    await CollectAdminsInGroupRecursively(subGroupDict, result, processedGroups, cancellationToken);
+                    await CollectAdminsInGroupRecursively(
+                        subGroupDict, result, processedGroups, cancellationToken, groupPath
+                    );
                 }
             }
         }
     }
+
 
     private async Task<List<DealerDto>> GetAdminsInGroupAsync(string groupId, CancellationToken cancellationToken)
     {
@@ -416,12 +416,19 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
 
             var roles = await rolesResponse.Content.ReadFromJsonAsync<List<RoleRepresentation>>(cancellationToken: cancellationToken) ?? [];
 
-            bool isDealers = roles.Any(r =>
+            bool isDealer = roles.Any(r =>
                 string.Equals(r.Name, "admin", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(r.Name, "super-admin", StringComparison.OrdinalIgnoreCase));
 
-            if (isDealers)
+            if (isDealer)
             {
+                // Fetch group details to get the group name
+                var groupResponse = await httpClient.GetAsync($"groups/{groupId}", cancellationToken);
+                groupResponse.EnsureSuccessStatusCode();
+
+                var groupDetails = await groupResponse.Content.ReadFromJsonAsync<Dictionary<string, object>>(cancellationToken: cancellationToken);
+                string groupName = groupDetails != null && TryGetGroupName(groupDetails, out var name) ? name : "";
+
                 dealers.Add(new DealerDto
                 {
                     DealerId = user.Id,
@@ -429,9 +436,9 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
                     FirstName = user.FirstName,
                     LastName = user.LastName,
                     Email = user.Email,
-                    GroupId = "",
-                    GroupName = "",
-                    SubGroupId = null,
+                    GroupId = groupId,
+                    GroupName = groupName,
+                    SubGroupId = null, // Will be set in recursive calls if applicable
                     SubGroupName = null,
                     Roles = roles.Select(r => r.Name).ToList()
                 });
@@ -441,41 +448,41 @@ public sealed class KeycloakDealerClient(HttpClient httpClient, IHttpContextAcce
         return dealers;
     }
 
-    private static bool TryGetGroupId(Dictionary<string, object> group, out string groupId)
+    private bool TryGetGroupId(Dictionary<string, object> group, out string id)
     {
-        groupId = string.Empty;
-
-        if (group.TryGetValue("id", out var idValue))
+        if (group.TryGetValue("id", out var idObj))
         {
-            groupId = idValue switch
+            if (idObj is JsonElement idElem && idElem.ValueKind == JsonValueKind.String)
             {
-                JsonElement el when el.ValueKind == JsonValueKind.String => el.GetString() ?? "",
-                string str => str,
-                _ => ""
-            };
-
-            return !string.IsNullOrWhiteSpace(groupId);
+                id = idElem.GetString()!;
+                return true;
+            }
+            if (idObj is string idStr)
+            {
+                id = idStr;
+                return true;
+            }
         }
-
+        id = null!;
         return false;
     }
 
-    private static bool TryGetGroupName(Dictionary<string, object> group, out string groupName)
+    private bool TryGetGroupName(Dictionary<string, object> group, out string name)
     {
-        groupName = string.Empty;
-
-        if (group.TryGetValue("name", out var nameValue))
+        if (group.TryGetValue("name", out var nameObj))
         {
-            groupName = nameValue switch
+            if (nameObj is JsonElement nameElem && nameElem.ValueKind == JsonValueKind.String)
             {
-                JsonElement el when el.ValueKind == JsonValueKind.String => el.GetString() ?? "",
-                string str => str,
-                _ => ""
-            };
-
-            return !string.IsNullOrWhiteSpace(groupName);
+                name = nameElem.GetString()!;
+                return true;
+            }
+            if (nameObj is string nameStr)
+            {
+                name = nameStr;
+                return true;
+            }
         }
-
+        name = null!;
         return false;
     }
 }

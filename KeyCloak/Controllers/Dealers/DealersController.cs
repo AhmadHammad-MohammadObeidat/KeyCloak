@@ -13,7 +13,6 @@ namespace KeyCloak.Api.Controllers.Dealers;
 
 
 [ApiController]
-[Authorize(Roles = "super-admin")]
 [ApiVersion("1.0")]
 [Route("api/v{version:apiVersion}/dealers")]
 public class DealersController(ISender sender) : ControllerBase
