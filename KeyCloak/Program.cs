@@ -20,7 +20,6 @@ using Microsoft.OpenApi.Models;
 using KeyCloak.Application.Services.DealersService;
 using KeyCloak.Infrastructure.Identity.Services.DealersService;
 using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakDealersClients;
-using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakGroupClients;
 using Microsoft.AspNetCore.Authorization;
 using KeyCloak.Api.Middleware;
 
