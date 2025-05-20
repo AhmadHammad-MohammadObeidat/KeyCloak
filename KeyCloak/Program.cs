@@ -1,5 +1,4 @@
 ﻿using System.Security.Claims;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using KeyCloak.Application;
 using KeyCloak.Application.Services.GroupsService;
@@ -23,7 +22,7 @@ using KeyCloak.Infrastructure.Identity.Services.DealersService;
 using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakDealersClients;
 using KeyCloak.Infrastructure.Identity.KeyCloakClients.KeycloakGroupClients;
 using Microsoft.AspNetCore.Authorization;
-using KeyCloak.Application.Permissions;
+using KeyCloak.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -92,29 +91,6 @@ builder.Services.AddAuthentication(options =>
         ValidateLifetime = true,
         RoleClaimType = ClaimTypes.Role
     };
-
-    options.Events = new JwtBearerEvents
-    {
-        OnTokenValidated = context =>
-        {
-            var identity = context.Principal?.Identity as ClaimsIdentity;
-            var realmAccess = context.Principal?.FindFirst("realm_access")?.Value;
-
-            if (!string.IsNullOrWhiteSpace(realmAccess))
-            {
-                using var doc = JsonDocument.Parse(realmAccess);
-                if (doc.RootElement.TryGetProperty("roles", out var rolesElement))
-                {
-                    foreach (var role in rolesElement.EnumerateArray())
-                    {
-                        identity?.AddClaim(new Claim(ClaimTypes.Role, role.GetString() ?? ""));
-                    }
-                }
-            }
-
-            return Task.CompletedTask;
-        }
-    };
 });
 
 // ===== Authorization Policies =====
@@ -124,11 +100,20 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("GroupViewerPolicy", policy =>
         policy.RequireAuthenticatedUser().RequireRole("group-viewer"));
 
-    // Keycloak permission-based policy with super-admin bypass
     options.AddPolicy("view-dealer-management", policy =>
-        policy.RequireAssertion(context =>
-            context.User.IsInRole("super-admin") || // Allow super-admin to bypass
-            context.Requirements.Any(req => req is KeycloakPermissionRequirement)));
+    policy.RequireAssertion(context =>
+    {
+        if (context.Resource is HttpContext httpContext &&
+            httpContext.Items.TryGetValue("KeycloakPermissions", out var permsObj) &&
+            permsObj is List<(string Resource, List<string> Scopes)> permissions)
+        {
+            return permissions.Any(p =>
+                p.Resource == "dealer-management" &&
+                p.Scopes.Contains("view"));
+        }
+
+        return false;
+    }));
 });
 
 // We still need this for other users
@@ -194,7 +179,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-
+app.UseMiddleware<KeycloakAuthorizationMiddleware>();
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();

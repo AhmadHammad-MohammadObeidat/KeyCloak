@@ -21,6 +21,5 @@ public class GroupInfoDto
 {
     public string GroupId { get; set; } = default!;
     public string GroupName { get; set; } = default!;
-    public string? SubGroupId { get; set; }
-    public string? SubGroupName { get; set; }
+    public string GroupPath { get; set; } = default!;
 }
